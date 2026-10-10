@@ -258,6 +258,7 @@ type storeAPI interface {
 
 	CountUsers(ctx context.Context) (int, error)
 	GetUser(ctx context.Context, userID int64) (store.User, error)
+	UserPublicIDs(ctx context.Context, ids ...int64) (map[int64]string, error)
 	GetUserPasswordHash(ctx context.Context, userID int64) (string, error)
 	UpdateUserImage(ctx context.Context, userID int64, image *string) error
 	UpdateUserPassword(ctx context.Context, userID int64, newPassword string) error
@@ -437,6 +438,7 @@ type storeAPI interface {
 	ListWebhooks(ctx context.Context, userID int64) ([]store.Webhook, error)
 	DeleteWebhook(ctx context.Context, userID, webhookID int64) error
 	ListWebhooksByProject(ctx context.Context, projectID int64) ([]store.WebhookRow, error)
+	GetWebhookDeliveryTarget(ctx context.Context, webhookID int64) (store.WebhookDeliveryTarget, bool, error)
 
 	UpsertPushSubscription(ctx context.Context, userID int64, endpoint, p256dh, auth string, userAgent *string) error
 	DeletePushSubscription(ctx context.Context, userID int64, endpoint string) error
@@ -580,7 +582,7 @@ func NewServer(st storeAPI, opts Options) *Server {
 	emailNotifier := newEmailNotifier(st, notificationMailQueue, publicBaseURL, smtpConfigured, logger)
 
 	fanout := eventbus.NewFanout(sseBridgeConsumer, publicSSEBridgeConsumer, whDispatcher, pushNotifier, emailNotifier)
-	whWorker := newWebhookWorker(whQueue, logger)
+	whWorker := newWebhookWorker(st, whQueue, logger)
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	webhookDone := whWorker.Done()
 	go whWorker.Run(workerCtx)
@@ -1162,6 +1164,39 @@ func (s *Server) publishAuthorizedCreatorNotification(ctx context.Context, autho
 	s.PublishEvent(ctx, eventbus.Event{
 		Type:      eventbus.TodoCreatorNotificationRecipientAuthorizedEventType,
 		ProjectID: authorized.ProjectID,
+		Payload:   payload,
+	})
+}
+
+// PublishTodoLifecycle emits todo.created/updated/moved/deleted through the event bus.
+// Designed to be passed to store.SetTodoLifecyclePublisher; the store calls it only after a
+// successful commit, so REST and MCP mutations publish identically. Stable user ids were
+// already captured inside that mutation transaction; this projection performs no identity lookup.
+func (s *Server) PublishTodoLifecycle(ctx context.Context, e store.TodoLifecycleEvent) {
+	p := eventbus.TodoLifecyclePayload{
+		ProjectID:            e.Todo.ProjectID,
+		ProjectSlug:          e.ProjectSlug,
+		TodoID:               e.Todo.ID,
+		LocalID:              e.Todo.LocalID,
+		Title:                e.Todo.Title,
+		ColumnKey:            e.Todo.ColumnKey,
+		AssigneeUserID:       e.Todo.AssigneeUserID,
+		ActorUserID:          e.ActorUserID,
+		AssigneeStableUserID: e.AssigneeStableUserID,
+		ActorStableUserID:    e.ActorStableUserID,
+		ChangedFields:        e.ChangedFields,
+		FromColumnKey:        e.FromColumnKey,
+		ToColumnKey:          e.ToColumnKey,
+		FromColumnName:       e.FromColumnName,
+		ToColumnName:         e.ToColumnName,
+	}
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	s.PublishEvent(ctx, eventbus.Event{
+		Type:      e.Type,
+		ProjectID: e.Todo.ProjectID,
 		Payload:   payload,
 	})
 }

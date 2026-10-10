@@ -24,6 +24,8 @@ When an event fires, Scrumboy delivers a JSON body asynchronously. Delivery is b
 
 `GET /api/webhooks` lists webhooks owned by the **current user** (not every webhook on every project). `DELETE` removes a webhook only if it belongs to that user.
 
+Delivery authorization is continuous, not a one-time grant at creation: a project webhook is eligible only while its owner account exists, the subscription still exists, and that owner remains a project Maintainer. Removing the owner from the project or demoting them to Contributor or Viewer stops delivery. Deleting either the subscription or its owner account also stops delivery.
+
 ---
 
 ## Creating and managing webhooks
@@ -70,6 +72,26 @@ Matching is exact string equality, or `*`:
 Some internal routing events (for example `board.refresh_needed` and creator-notification internal events) are **never** sent as webhooks. The set of deliverable types can grow as Scrumboy adds features.
 
 Event names are **not** validated against a fixed allowlist at create time. Subscribing to a type that is never emitted, or that is not used yet, is harmless — those entries simply never match.
+
+---
+
+## Todo lifecycle events
+
+Besides `todo.assigned`, Scrumboy delivers four todo events. They are published from the store **after the mutation commits**, so a failed or rejected mutation never emits one, and the REST API and MCP tools behave identically. Temporary (anonymous) boards do not emit them.
+
+| Type | When | Extra payload fields |
+| ---- | ---- | -------------------- |
+| `todo.created` | A todo was created | none |
+| `todo.updated` | Title, body, sprint, estimation, priority, or tags actually changed | `changedFields` (subset of `title`, `body`, `sprint`, `estimation`, `priority`, `tags`) |
+| `todo.moved` | The todo changed column (a reorder within the same column is not delivered) | `fromColumnKey`, `toColumnKey`, `fromColumnName`, `toColumnName` |
+| `todo.deleted` | A todo was deleted | none (fields describe its last state) |
+
+Common payload fields: `projectId`, `projectSlug`, `todoId`, `localId`, `title`, `columnKey`, `assigneeUserId`, `assigneeStableUserId`, `actorUserId`, `actorStableUserId`. The body of the todo is never included.
+
+- **Stable ids:** integer user ids are kept for compatibility, but SQLite can reuse them after a user is deleted. Key any external account link on `actorStableUserId` / `assigneeStableUserId` (the same value as `stableUserId` from the MCP `me_get` tool).
+- **No duplicates:** a no-op update or same-column reorder emits nothing, and an assignee-only change is delivered as `todo.assigned` only (not also as `todo.updated`). Creating a todo that already has an assignee emits both `todo.created` and `todo.assigned`.
+- **Not guaranteed:** delivery stays best-effort (in-memory queue); see [Delivery and retry behavior](#delivery-and-retry-behavior).
+- Internal events such as `board.refresh_needed` are still never delivered.
 
 ---
 
@@ -148,11 +170,14 @@ These controls reduce SSRF risk from webhook URLs. They also mean **LAN-only or 
 Delivery is **asynchronous** and **best-effort**:
 
 1. After an event is published, a dispatcher matches project subscriptions and enqueues work (without blocking SSE).
-2. An in-process worker POSTs to your URL (10s HTTP timeout).
-3. **Success** is any HTTP status in **2xx**.
-4. **Retries:** up to **three** attempts with fixed backoff (immediate, then ~100ms, then ~400ms) for transient failures (network errors, non-2xx responses that are not classified permanent).
-5. **Permanent failures** (forbidden destination / SSRF refusal, or redirect) are **not** retried beyond the failing attempt.
-6. The queue is **in-memory** (bounded capacity). On process shutdown the queue is sealed and drained against a deadline; some queued items may still be lost if the process exits. Scrumboy is **not** a durable external queue — design your receiver accordingly and use event `id` for idempotency.
+2. Immediately before each send attempt, the worker reloads the subscription and verifies that its owner account still exists and still has Maintainer access to the project. Missing or unauthorized records are dropped. Authorization lookup failures fail closed and make no HTTP request.
+3. An in-process worker POSTs to the currently stored subscription URL (10s HTTP timeout).
+4. **Success** is any HTTP status in **2xx**.
+5. **Retries:** up to **three** attempts with fixed backoff (immediate, then ~100ms, then ~400ms) for transient failures (network errors, non-2xx responses that are not classified permanent, and temporary authorization-lookup errors). Authorization is rechecked before every retry.
+6. **Permanent failures** (revoked/deleted subscriptions, forbidden destination / SSRF refusal, or redirect) are **not** retried beyond the failing attempt.
+7. The queue is **in-memory** (bounded capacity). On process shutdown the queue is sealed and drained against a deadline; some queued items may still be lost if the process exits. Scrumboy is **not** a durable external queue — design your receiver accordingly and use event `id` for idempotency.
+
+Because authorization is revalidated at send time, an event queued while a subscription was eligible is dropped if membership, account, or subscription state is revoked before the HTTP request begins. Scrumboy does not attempt to cancel a request that was already in flight when revocation occurred.
 
 ---
 
