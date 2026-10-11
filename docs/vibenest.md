@@ -28,8 +28,9 @@ forwarded-header handling; use it only with the platform's trusted proxy setup.
 
 ## Free tier validation
 
-The VibeNest Free tier provides 256 MB RAM, 0.5 vCPU, and 4 GB storage for a
-three-month trial. A successful build does not establish suitability: measure
+The VibeNest Free tier provides 256 MB RAM, 0.5 vCPU, and 4 GB storage.
+The current platform implementation has no Free-server expiry. A successful
+build does not establish suitability: measure
 runtime memory, CPU and disk use, exercise authentication and collaboration, and
 check SQLite data after restart and redeploy. Production suitability depends on
 your workload. Acceptance results will be recorded after the live pilot.
