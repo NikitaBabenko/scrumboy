@@ -50,6 +50,20 @@
 
 ## Quick Start
 
+### Deploy on VibeNest
+
+[![Deploy to VibeNest](https://vibenest.net/deploy-to-vibenest.svg)](https://vibenest.net/deploy?repo=https://github.com/NikitaBabenko/scrumboy&branch=main)
+
+Open the button, sign in to VibeNest, and deploy this repository. Scrumboy uses
+port `8080` and SQLite. Use a persistent volume mounted at `/data` so the database
+and uploaded files survive restarts and redeploys. With the Dockerfile, the defaults
+are `DATA_DIR=/data` and `SQLITE_PATH=/data/app.db`.
+
+Use **Full** mode for local accounts and durable boards. Create the first owner
+on your new instance, then sign in. Email, SSO, and paid external services are
+optional. Set `SCRUMBOY_PUBLIC_BASE_URL` to your instance's HTTPS URL when enabling
+features that generate absolute links. See [VibeNest deployment notes](docs/vibenest.md).
+
 Runs in seconds. No setup required.
 
 No `.env` file, TLS certificates, or encryption key are required to start the app.
